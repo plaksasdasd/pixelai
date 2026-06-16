@@ -40,8 +40,9 @@ def compute_gradient_penalty(critic, real_images, fake_images, text_embeddings, 
     # Flatten the gradients to compute L2 norm
     gradients = gradients.view(batch_size, -1)
     
-    # Compute L2 norm of gradients
-    gradient_norm = gradients.norm(2, dim=1)
+    # Compute L2 norm of gradients. The epsilon avoids a NaN gradient of sqrt() at 0,
+    # which can happen when a sample's gradient is exactly zero.
+    gradient_norm = torch.sqrt(torch.sum(gradients ** 2, dim=1) + 1e-12)
     
     # Compute gradient penalty: penalty = lambda * (norm - 1)^2
     gradient_penalty = torch.mean((gradient_norm - 1) ** 2)
@@ -51,7 +52,7 @@ def init_weights(m):
     classname = m.__class__.__name__
     if classname.find('Conv') != -1:
         nn.init.normal_(m.weight.data, 0.0, 0.02)
-    elif classname.find('BatchNorm') != -1 or classname.find('InstanceNorm') != -1:
+    elif classname.find('Norm') != -1:
         if m.weight is not None:
             nn.init.normal_(m.weight.data, 1.0, 0.02)
         if m.bias is not None:
@@ -62,7 +63,7 @@ def init_weights(m):
             nn.init.constant_(m.bias.data, 0)
 
 def train(data_dir, checkpoint_dir="checkpoints", samples_dir="samples", epochs=100, batch_size=16, 
-          g_lr=1e-4, d_lr=2e-4, n_critic=5, gp_lambda=10.0, latent_dim=128, device=None, callbacks=None,
+          g_lr=1e-4, d_lr=1e-4, n_critic=5, gp_lambda=10.0, latent_dim=128, device=None, callbacks=None,
           resume=False, epoch_offset=0):
     """
     Main training function for Minecraft Skin cWGAN-GP.
@@ -93,8 +94,12 @@ def train(data_dir, checkpoint_dir="checkpoints", samples_dir="samples", epochs=
         else:
             print("Warning: generator checkpoint not found. Starting generator from scratch.")
         if os.path.exists(discriminator_path):
-            netD.load_state_dict(torch.load(discriminator_path, map_location=device))
-            print(f"Resumed discriminator from: {discriminator_path}")
+            try:
+                netD.load_state_dict(torch.load(discriminator_path, map_location=device))
+                print(f"Resumed discriminator from: {discriminator_path}")
+            except RuntimeError as e:
+                print(f"Warning: could not load discriminator checkpoint ({e}). Starting discriminator from scratch.")
+                netD.apply(init_weights)
         else:
             print("Warning: discriminator checkpoint not found. Starting discriminator from scratch.")
     else:
@@ -156,18 +161,21 @@ def train(data_dir, checkpoint_dir="checkpoints", samples_dir="samples", epochs=
             # ----------------------------------------------------
             netD.zero_grad()
             
-            # Generate fake images
-            noise = torch.randn(b_size, latent_dim, device=device)
-            fake_imgs = netG(noise, text_embeds)
+            # Generate fake images. The critic only needs their values, so we skip
+            # building the generator's autograd graph here (it would be discarded by
+            # detach() anyway). This avoids n_critic redundant generator forward graphs.
+            with torch.no_grad():
+                noise = torch.randn(b_size, latent_dim, device=device)
+                fake_imgs = netG(noise, text_embeds)
             
             # Critic scores
             real_validity = netD(real_imgs, text_embeds)
-            fake_validity = netD(fake_imgs.detach(), text_embeds)
+            fake_validity = netD(fake_imgs, text_embeds)
             real_score = torch.mean(real_validity)
             fake_score = torch.mean(fake_validity)
             
             # Gradient penalty
-            gp = compute_gradient_penalty(netD, real_imgs, fake_imgs.detach(), text_embeds, device)
+            gp = compute_gradient_penalty(netD, real_imgs, fake_imgs, text_embeds, device)
             
             # Critic loss (WGAN critic maximizes: real_score - fake_score, so we minimize negative of that)
             # Small drift penalty keeps critic outputs from drifting to huge magnitudes
@@ -267,7 +275,7 @@ if __name__ == "__main__":
     parser.add_argument("--epochs", type=int, default=150, help="Number of training epochs")
     parser.add_argument("--batch_size", type=int, default=16, help="Batch size")
     parser.add_argument("--g_lr", type=float, default=1e-4, help="Generator learning rate")
-    parser.add_argument("--d_lr", type=float, default=2e-4, help="Discriminator learning rate")
+    parser.add_argument("--d_lr", type=float, default=1e-4, help="Discriminator learning rate")
     parser.add_argument("--n_critic", type=int, default=5, help="Number of critic updates per generator update")
     parser.add_argument("--gp_lambda", type=float, default=10.0, help="Gradient penalty weight")
     parser.add_argument("--latent_dim", type=int, default=128, help="Size of noise vector z")

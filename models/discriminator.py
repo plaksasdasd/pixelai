@@ -1,21 +1,29 @@
 import torch
 import torch.nn as nn
 
+def layer_norm(num_channels):
+    # WGAN-GP forbids BatchNorm/InstanceNorm in the critic because they break the
+    # per-sample 1-Lipschitz constraint that the gradient penalty enforces. The paper
+    # recommends LayerNorm (or no normalization). GroupNorm with a single group is a
+    # convolutional LayerNorm: it normalizes over all channels/spatial positions of each
+    # sample independently, with no batch statistics and no running state.
+    return nn.GroupNorm(1, num_channels)
+
 class DiscResBlock(nn.Module):
     def __init__(self, in_channels, out_channels, stride=1):
         super().__init__()
         self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1, bias=False)
-        self.inst_norm1 = nn.InstanceNorm2d(out_channels, affine=True)
+        self.norm1 = layer_norm(out_channels)
         self.relu = nn.LeakyReLU(0.2, inplace=True)
         
         self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False)
-        self.inst_norm2 = nn.InstanceNorm2d(out_channels, affine=True)
+        self.norm2 = layer_norm(out_channels)
         
         # Shortcut connection
         if stride != 1 or in_channels != out_channels:
             self.shortcut = nn.Sequential(
                 nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=stride, bias=False),
-                nn.InstanceNorm2d(out_channels, affine=True)
+                layer_norm(out_channels)
             )
         else:
             self.shortcut = nn.Identity()
@@ -23,10 +31,10 @@ class DiscResBlock(nn.Module):
     def forward(self, x):
         residual = self.shortcut(x)
         out = self.conv1(x)
-        out = self.inst_norm1(out)
+        out = self.norm1(out)
         out = self.relu(out)
         out = self.conv2(out)
-        out = self.inst_norm2(out)
+        out = self.norm2(out)
         return self.relu(out + residual)
 
 class Discriminator(nn.Module):
