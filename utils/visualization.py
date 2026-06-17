@@ -84,7 +84,9 @@ def pil_to_base64(pil_img):
 
 def save_skin(tensor, filepath):
     """Saves a tensor skin to the given filepath as PNG."""
-    os.makedirs(os.path.dirname(filepath), exist_ok=True)
+    directory = os.path.dirname(filepath)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
     img = tensor_to_pil(tensor)
     img.save(filepath, "PNG")
 
