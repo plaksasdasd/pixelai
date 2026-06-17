@@ -252,8 +252,8 @@ def train(data_dir, checkpoint_dir="checkpoints", samples_dir="samples", epochs=
         g_losses.append(avg_g_loss)
         d_losses.append(avg_d_loss)
         
-        # Periodic output
-        if local_epoch % 10 == 0 or local_epoch == 1 or local_epoch == epochs:
+        # Periodic output (every 5 epochs so the UI preview updates frequently)
+        if local_epoch % 5 == 0 or local_epoch == 1 or local_epoch == epochs:
             # Generate and save fixed evaluation samples using EMA generator
             with torch.no_grad():
                 gen_samples = ema_G(fixed_noise, fixed_embeddings)

@@ -90,6 +90,29 @@ def save_status(status_dict):
     except Exception as e:
         print(f"Error saving status: {e}")
 
+def find_latest_sample_epoch(samples_dir, max_epoch=None):
+    """Return the most recent epoch number that has saved sample images.
+
+    Sample images are written periodically (not every epoch), so the current
+    epoch usually has no file yet. Instead of guessing the epoch number, scan
+    the samples directory and return the largest epoch <= max_epoch that
+    actually has files. Returns None if no samples are available.
+    """
+    if not os.path.isdir(samples_dir):
+        return None
+    epochs = set()
+    for f in os.listdir(samples_dir):
+        if not (f.startswith("epoch_") and f.lower().endswith(".png")):
+            continue
+        parts = f.split("_")
+        try:
+            ep = int(parts[1])
+        except (IndexError, ValueError):
+            continue
+        if max_epoch is None or ep <= max_epoch:
+            epochs.add(ep)
+    return max(epochs) if epochs else None
+
 def run_training_thread(data_dir, checkpoint_dir, samples_dir, epochs, batch_size, g_lr, d_lr, n_critic, gp_lambda, resume, device):
     status = load_status()
     previous_loss_history = status.get("loss_history", get_default_status()["loss_history"])
@@ -447,11 +470,11 @@ with tabs[1]:
                 
             # Preview of current epoch samples
             if curr_epoch > 0:
-                preview_epoch = curr_epoch if (curr_epoch % 5 == 0 or curr_epoch == 1) else (curr_epoch - (curr_epoch % 5))
-                if preview_epoch < 1:
-                    preview_epoch = 1
-                
-                preview_files = [f for f in os.listdir(DEFAULT_SAMPLES_DIR) if f.startswith(f"epoch_{preview_epoch}_")]
+                preview_epoch = find_latest_sample_epoch(DEFAULT_SAMPLES_DIR, max_epoch=curr_epoch)
+
+                preview_files = []
+                if preview_epoch is not None:
+                    preview_files = [f for f in os.listdir(DEFAULT_SAMPLES_DIR) if f.startswith(f"epoch_{preview_epoch}_")]
                 if len(preview_files) > 0:
                     st.write(f"**Промежуточный результат генерации нейросети (эпоха {preview_epoch}):**")
                     cols = st.columns(min(len(preview_files), 4))
