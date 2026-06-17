@@ -44,6 +44,30 @@ def get_minecraft_mask():
     
     return mask
 
+def get_minecraft_mask_tensor(device="cpu"):
+    """
+    Returns a float tensor of shape (1, 1, 64, 64) with 1.0 for allowed skin
+    pixels and 0.0 for background. Suitable for element-wise multiplication
+    with image tensors in [-1, 1] range (background becomes 0, which maps
+    to mid-grey; the critic sees identical background in real and fake).
+    """
+    np_mask = get_minecraft_mask().astype(np.float32)  # (64, 64)
+    t = torch.from_numpy(np_mask).unsqueeze(0).unsqueeze(0)  # (1,1,64,64)
+    return t.to(device)
+
+
+def apply_skin_mask(images, mask_tensor):
+    """
+    Zero out non-skin pixels in a batch of images.
+    Args:
+        images: (B, C, 64, 64) tensor in [-1, 1]
+        mask_tensor: (1, 1, 64, 64) float mask (1=skin, 0=background)
+    Returns:
+        Masked images with background pixels set to 0.
+    """
+    return images * mask_tensor
+
+
 def tensor_to_pil(tensor):
     """
     Converts a PyTorch tensor of shape (4, 64, 64) with values in [-1, 1]
