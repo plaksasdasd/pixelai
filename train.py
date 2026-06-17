@@ -1,4 +1,5 @@
 import os
+import copy
 import argparse
 import torch
 import torch.nn as nn
@@ -10,7 +11,7 @@ from data.dataset import MinecraftSkinDataset
 from models.text_encoder import TextEncoder
 from models.generator import Generator
 from models.discriminator import Discriminator
-from utils.visualization import save_skin
+from utils.visualization import save_skin, get_minecraft_mask_tensor, apply_skin_mask
 
 def compute_gradient_penalty(critic, real_images, fake_images, text_embeddings, device):
     """
@@ -48,6 +49,14 @@ def compute_gradient_penalty(critic, real_images, fake_images, text_embeddings, 
     gradient_penalty = torch.mean((gradient_norm - 1) ** 2)
     return gradient_penalty
 
+@torch.no_grad()
+def update_ema(ema_model, model, decay):
+    ema_params = dict(ema_model.named_parameters())
+    model_params = dict(model.named_parameters())
+    for name, ema_param in ema_params.items():
+        ema_param.mul_(decay).add_(model_params[name], alpha=1.0 - decay)
+
+
 def init_weights(m):
     classname = m.__class__.__name__
     if classname.find('Conv') != -1:
@@ -63,7 +72,7 @@ def init_weights(m):
             nn.init.constant_(m.bias.data, 0)
 
 def train(data_dir, checkpoint_dir="checkpoints", samples_dir="samples", epochs=100, batch_size=16, 
-          g_lr=1e-4, d_lr=1e-4, n_critic=5, gp_lambda=10.0, latent_dim=128, device=None, callbacks=None,
+          g_lr=1e-4, d_lr=5e-5, n_critic=3, gp_lambda=10.0, latent_dim=128, device=None, callbacks=None,
           resume=False, epoch_offset=0):
     """
     Main training function for Minecraft Skin cWGAN-GP.
@@ -106,6 +115,14 @@ def train(data_dir, checkpoint_dir="checkpoints", samples_dir="samples", epochs=
         # Apply standard GAN weight initialization to "start from scratch" cleanly
         netG.apply(init_weights)
         netD.apply(init_weights)
+    
+    # EMA copy of the generator for smoother inference
+    ema_G = copy.deepcopy(netG)
+    ema_G.eval()
+    ema_decay = 0.999
+    
+    # Skin mask tensor for zeroing out non-skin pixels in fake images
+    skin_mask = get_minecraft_mask_tensor(device)
     
     # Optimizers (WGAN-GP uses Adam with beta1=0.0, beta2=0.9 or 0.99 for stability)
     optG = optim.Adam(netG.parameters(), lr=g_lr, betas=(0.0, 0.9))
@@ -167,6 +184,7 @@ def train(data_dir, checkpoint_dir="checkpoints", samples_dir="samples", epochs=
             with torch.no_grad():
                 noise = torch.randn(b_size, latent_dim, device=device)
                 fake_imgs = netG(noise, text_embeds)
+                fake_imgs = apply_skin_mask(fake_imgs, skin_mask)
             
             # Critic scores
             real_validity = netD(real_imgs, text_embeds)
@@ -199,12 +217,16 @@ def train(data_dir, checkpoint_dir="checkpoints", samples_dir="samples", epochs=
                 # Sample noise again or reuse
                 noise = torch.randn(b_size, latent_dim, device=device)
                 gen_imgs = netG(noise, text_embeds)
+                gen_imgs = apply_skin_mask(gen_imgs, skin_mask)
                 
                 # Generator loss: maximize fake scores (minimize negative fake score)
                 g_loss = -torch.mean(netD(gen_imgs, text_embeds))
                 
                 g_loss.backward()
                 optG.step()
+                
+                # Update EMA generator
+                update_ema(ema_G, netG, ema_decay)
                 
                 epoch_g_loss += g_loss.item()
                 epoch_g_updates += 1
@@ -229,23 +251,22 @@ def train(data_dir, checkpoint_dir="checkpoints", samples_dir="samples", epochs=
         
         # Periodic output
         if local_epoch % 10 == 0 or local_epoch == 1 or local_epoch == epochs:
-            # Generate and save fixed evaluation samples
-            netG.eval()
+            # Generate and save fixed evaluation samples using EMA generator
             with torch.no_grad():
-                gen_samples = netG(fixed_noise, fixed_embeddings)
+                gen_samples = ema_G(fixed_noise, fixed_embeddings)
+                gen_samples = apply_skin_mask(gen_samples, skin_mask)
                 for idx, sample in enumerate(gen_samples):
                     safe_prompt = sample_prompts[idx].replace(" ", "_")
                     filename = f"epoch_{epoch}_{safe_prompt}.png"
                     save_skin(sample, os.path.join(samples_dir, filename))
-            netG.train()
             
-            # Save checkpoints
-            torch.save(netG.state_dict(), os.path.join(checkpoint_dir, "generator_latest.pth"))
+            # Save EMA weights as the main checkpoints (smoother for inference)
+            torch.save(ema_G.state_dict(), os.path.join(checkpoint_dir, "generator_latest.pth"))
             torch.save(netD.state_dict(), os.path.join(checkpoint_dir, "discriminator_latest.pth"))
             
             # Checkpoint at specific milestones
             if epoch % 50 == 0:
-                torch.save(netG.state_dict(), os.path.join(checkpoint_dir, f"generator_epoch_{epoch}.pth"))
+                torch.save(ema_G.state_dict(), os.path.join(checkpoint_dir, f"generator_epoch_{epoch}.pth"))
         
         # Invoke callback if supplied (useful for updating Streamlit UI charts)
         if callbacks is not None:
@@ -260,8 +281,8 @@ def train(data_dir, checkpoint_dir="checkpoints", samples_dir="samples", epochs=
                 print("Training stopped early by callback request.")
                 break
             
-    # Save final models
-    torch.save(netG.state_dict(), os.path.join(checkpoint_dir, "generator_final.pth"))
+    # Save final models (EMA weights for generator)
+    torch.save(ema_G.state_dict(), os.path.join(checkpoint_dir, "generator_final.pth"))
     torch.save(netD.state_dict(), os.path.join(checkpoint_dir, "discriminator_final.pth"))
     print("Training finished! Models saved successfully.")
     
@@ -275,8 +296,8 @@ if __name__ == "__main__":
     parser.add_argument("--epochs", type=int, default=150, help="Number of training epochs")
     parser.add_argument("--batch_size", type=int, default=16, help="Batch size")
     parser.add_argument("--g_lr", type=float, default=1e-4, help="Generator learning rate")
-    parser.add_argument("--d_lr", type=float, default=1e-4, help="Discriminator learning rate")
-    parser.add_argument("--n_critic", type=int, default=5, help="Number of critic updates per generator update")
+    parser.add_argument("--d_lr", type=float, default=5e-5, help="Discriminator learning rate")
+    parser.add_argument("--n_critic", type=int, default=3, help="Number of critic updates per generator update")
     parser.add_argument("--gp_lambda", type=float, default=10.0, help="Gradient penalty weight")
     parser.add_argument("--latent_dim", type=int, default=128, help="Size of noise vector z")
     parser.add_argument("--resume", action="store_true", help="Resume from latest generator/discriminator checkpoints")

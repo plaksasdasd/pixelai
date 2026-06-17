@@ -1,5 +1,6 @@
 import os
 import json
+import random
 import torch
 from torch.utils.data import Dataset
 from PIL import Image
@@ -95,6 +96,31 @@ class MinecraftSkinDataset(Dataset):
                     "prompt": prompt
                 })
 
+    @staticmethod
+    def _skin_aware_hflip(tensor):
+        """
+        Horizontally flip a 64×64 Minecraft skin tensor while swapping
+        left↔right body-part regions so the anatomy stays correct.
+        """
+        out = tensor.clone()
+        # Flip every pixel column-wise
+        out = torch.flip(out, dims=[2])  # flip W axis
+
+        # Swap left↔right body-part blocks so limbs stay on the correct side.
+        # Right Leg (rows 16-32, cols 0-16) ↔ Left Leg (rows 48-64, cols 16-32)
+        rl = out[:, 16:32, 48:64].clone()
+        ll = out[:, 48:64, 32:48].clone()
+        out[:, 16:32, 48:64] = ll
+        out[:, 48:64, 32:48] = rl
+
+        # Right Arm (rows 16-32, cols 40-56) ↔ Left Arm (rows 48-64, cols 32-48)
+        ra = out[:, 16:32, 8:24].clone()
+        la = out[:, 48:64, 16:32].clone()
+        out[:, 16:32, 8:24] = la
+        out[:, 48:64, 16:32] = ra
+
+        return out
+
     def __len__(self):
         return len(self.samples)
 
@@ -128,6 +154,10 @@ class MinecraftSkinDataset(Dataset):
             img = Image.fromarray(np_img, mode="RGBA")
 
             img_tensor = self.transform(img)
+
+            # Skin-aware horizontal flip augmentation (50% chance)
+            if random.random() < 0.5:
+                img_tensor = self._skin_aware_hflip(img_tensor)
         except Exception as e:
             print(f"Error loading image {img_path}: {e}")
             # Return a blank transparent image tensor in case of error
