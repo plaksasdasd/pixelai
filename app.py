@@ -186,9 +186,13 @@ def run_training_thread(data_dir, checkpoint_dir, samples_dir, epochs, batch_siz
 
 # Helper function to check model availability
 def is_model_available():
-    latest_path = os.path.join(DEFAULT_CHECKPOINT_DIR, "generator_latest.pth")
-    final_path = os.path.join(DEFAULT_CHECKPOINT_DIR, "generator_final.pth")
-    return os.path.exists(latest_path) or os.path.exists(final_path)
+    candidates = [
+        os.path.join(DEFAULT_CHECKPOINT_DIR, "generator_ema_latest.pth"),
+        os.path.join(DEFAULT_CHECKPOINT_DIR, "generator_ema_final.pth"),
+        os.path.join(DEFAULT_CHECKPOINT_DIR, "generator_latest.pth"),
+        os.path.join(DEFAULT_CHECKPOINT_DIR, "generator_final.pth"),
+    ]
+    return any(os.path.exists(p) for p in candidates)
 
 def is_training_checkpoint_available():
     generator_latest_path = os.path.join(DEFAULT_CHECKPOINT_DIR, "generator_latest.pth")
@@ -200,12 +204,15 @@ def is_training_checkpoint_available():
     return has_generator and has_discriminator
 
 def get_latest_model_path():
-    latest_path = os.path.join(DEFAULT_CHECKPOINT_DIR, "generator_latest.pth")
-    final_path = os.path.join(DEFAULT_CHECKPOINT_DIR, "generator_final.pth")
-    if os.path.exists(latest_path):
-        return latest_path
-    if os.path.exists(final_path):
-        return final_path
+    candidates = [
+        os.path.join(DEFAULT_CHECKPOINT_DIR, "generator_ema_latest.pth"),
+        os.path.join(DEFAULT_CHECKPOINT_DIR, "generator_ema_final.pth"),
+        os.path.join(DEFAULT_CHECKPOINT_DIR, "generator_latest.pth"),
+        os.path.join(DEFAULT_CHECKPOINT_DIR, "generator_final.pth"),
+    ]
+    for p in candidates:
+        if os.path.exists(p):
+            return p
     return None
 
 # Load text encoder (cached to prevent reloading)

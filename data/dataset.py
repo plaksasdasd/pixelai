@@ -2,6 +2,7 @@ import os
 import json
 import random
 import torch
+import torchvision.transforms.functional as TF
 from torch.utils.data import Dataset
 from PIL import Image
 import torchvision.transforms as transforms
@@ -97,6 +98,34 @@ class MinecraftSkinDataset(Dataset):
                 })
 
     @staticmethod
+    def _color_jitter_rgba(tensor, hue_range=0.05, brightness_range=0.15):
+        """
+        Apply random hue shift and brightness jitter to the RGB channels
+        of an RGBA tensor while keeping alpha untouched.
+        Operates on a (4, H, W) tensor in [-1, 1].
+        """
+        rgb = tensor[:3]  # (3, H, W)
+        alpha = tensor[3:4]  # (1, H, W)
+
+        # Rescale RGB from [-1, 1] to [0, 1] for torchvision functional ops
+        rgb01 = (rgb + 1.0) / 2.0
+
+        # Random hue shift
+        hue_factor = random.uniform(-hue_range, hue_range)
+        rgb01 = TF.adjust_hue(rgb01, hue_factor)
+
+        # Random brightness
+        brightness_factor = 1.0 + random.uniform(-brightness_range, brightness_range)
+        rgb01 = TF.adjust_brightness(rgb01, brightness_factor)
+
+        rgb01 = rgb01.clamp(0.0, 1.0)
+
+        # Scale back to [-1, 1]
+        rgb = rgb01 * 2.0 - 1.0
+
+        return torch.cat([rgb, alpha], dim=0)
+
+    @staticmethod
     def _skin_aware_hflip(tensor):
         """
         Horizontally flip a 64×64 Minecraft skin tensor while swapping
@@ -154,6 +183,10 @@ class MinecraftSkinDataset(Dataset):
             img = Image.fromarray(np_img, mode="RGBA")
 
             img_tensor = self.transform(img)
+
+            # Color augmentation: hue/brightness jitter on RGB (50% chance)
+            if random.random() < 0.5:
+                img_tensor = self._color_jitter_rgba(img_tensor)
 
             # Skin-aware horizontal flip augmentation (50% chance)
             if random.random() < 0.5:

@@ -54,7 +54,11 @@ def update_ema(ema_model, model, decay):
     ema_params = dict(ema_model.named_parameters())
     model_params = dict(model.named_parameters())
     for name, ema_param in ema_params.items():
-        ema_param.mul_(decay).add_(model_params[name], alpha=1.0 - decay)
+        ema_param.mul_(decay).add_(model_params[name].detach(), alpha=1.0 - decay)
+    ema_buffers = dict(ema_model.named_buffers())
+    model_buffers = dict(model.named_buffers())
+    for name, ema_buffer in ema_buffers.items():
+        ema_buffer.copy_(model_buffers[name])
 
 
 def init_weights(m):
@@ -73,7 +77,7 @@ def init_weights(m):
 
 def train(data_dir, checkpoint_dir="checkpoints", samples_dir="samples", epochs=100, batch_size=16, 
           g_lr=1e-4, d_lr=5e-5, n_critic=3, gp_lambda=10.0, latent_dim=128, device=None, callbacks=None,
-          resume=False, epoch_offset=0):
+          resume=False, epoch_offset=0, ema_decay=0.999, augment=True):
     """
     Main training function for Minecraft Skin cWGAN-GP.
     """
@@ -119,7 +123,6 @@ def train(data_dir, checkpoint_dir="checkpoints", samples_dir="samples", epochs=
     # EMA copy of the generator for smoother inference
     ema_G = copy.deepcopy(netG)
     ema_G.eval()
-    ema_decay = 0.999
     
     # Skin mask tensor for zeroing out non-skin pixels in fake images
     skin_mask = get_minecraft_mask_tensor(device)
@@ -260,13 +263,15 @@ def train(data_dir, checkpoint_dir="checkpoints", samples_dir="samples", epochs=
                     filename = f"epoch_{epoch}_{safe_prompt}.png"
                     save_skin(sample, os.path.join(samples_dir, filename))
             
-            # Save EMA weights as the main checkpoints (smoother for inference)
-            torch.save(ema_G.state_dict(), os.path.join(checkpoint_dir, "generator_latest.pth"))
+            # Save both raw and EMA checkpoints
+            torch.save(netG.state_dict(), os.path.join(checkpoint_dir, "generator_latest.pth"))
+            torch.save(ema_G.state_dict(), os.path.join(checkpoint_dir, "generator_ema_latest.pth"))
             torch.save(netD.state_dict(), os.path.join(checkpoint_dir, "discriminator_latest.pth"))
             
             # Checkpoint at specific milestones
             if epoch % 50 == 0:
-                torch.save(ema_G.state_dict(), os.path.join(checkpoint_dir, f"generator_epoch_{epoch}.pth"))
+                torch.save(netG.state_dict(), os.path.join(checkpoint_dir, f"generator_epoch_{epoch}.pth"))
+                torch.save(ema_G.state_dict(), os.path.join(checkpoint_dir, f"generator_ema_epoch_{epoch}.pth"))
         
         # Invoke callback if supplied (useful for updating Streamlit UI charts)
         if callbacks is not None:
@@ -281,8 +286,9 @@ def train(data_dir, checkpoint_dir="checkpoints", samples_dir="samples", epochs=
                 print("Training stopped early by callback request.")
                 break
             
-    # Save final models (EMA weights for generator)
-    torch.save(ema_G.state_dict(), os.path.join(checkpoint_dir, "generator_final.pth"))
+    # Save final models (both raw and EMA)
+    torch.save(netG.state_dict(), os.path.join(checkpoint_dir, "generator_final.pth"))
+    torch.save(ema_G.state_dict(), os.path.join(checkpoint_dir, "generator_ema_final.pth"))
     torch.save(netD.state_dict(), os.path.join(checkpoint_dir, "discriminator_final.pth"))
     print("Training finished! Models saved successfully.")
     

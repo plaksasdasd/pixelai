@@ -5,25 +5,38 @@ from models.generator import Generator
 from models.text_encoder import TextEncoder
 from utils.visualization import save_skin, tensor_to_pil
 
-def generate_skin(prompt, weights_path="checkpoints/generator_latest.pth", output_path="output_skin.png", latent_dim=128, device=None):
+def _resolve_weights(explicit_path):
+    """
+    Resolve generator weights path. Prefers EMA checkpoints for smoother
+    inference, falling back to raw weights for backward compatibility.
+    """
+    candidates = [
+        "checkpoints/generator_ema_latest.pth",
+        "checkpoints/generator_ema_final.pth",
+        "checkpoints/generator_latest.pth",
+        "checkpoints/generator_final.pth",
+        "generator_latest.pth",
+        "generator_final.pth",
+    ]
+    if explicit_path and os.path.exists(explicit_path):
+        return explicit_path
+    for p in candidates:
+        if os.path.exists(p):
+            return p
+    raise FileNotFoundError(
+        f"Could not find model weights at '{explicit_path}'. "
+        "Make sure you train the model first or place the weights file correctly."
+    )
+
+
+def generate_skin(prompt, weights_path=None, output_path="output_skin.png", latent_dim=128, device=None):
     """
     Generates a Minecraft skin from a text prompt.
     """
     device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
     
-    # Check weights
-    if not os.path.exists(weights_path):
-        # Fallback to other possible filenames
-        alt_paths = ["checkpoints/generator_final.pth", "generator_latest.pth", "generator_final.pth"]
-        found = False
-        for alt in alt_paths:
-            if os.path.exists(alt):
-                weights_path = alt
-                found = True
-                break
-        if not found:
-            raise FileNotFoundError(f"Could not find model weights at '{weights_path}'. Make sure you train the model first or place the weights file correctly.")
+    weights_path = _resolve_weights(weights_path)
 
     # Initialize Text Encoder
     print("Loading Text Encoder...")
@@ -59,7 +72,7 @@ def generate_skin(prompt, weights_path="checkpoints/generator_latest.pth", outpu
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Generate Minecraft Skin from Text Prompt")
     parser.add_argument("--prompt", type=str, required=True, help="Description of the skin (e.g. 'ninja with red eyes')")
-    parser.add_argument("--weights", type=str, default="checkpoints/generator_latest.pth", help="Path to generator weights (.pth)")
+    parser.add_argument("--weights", type=str, default=None, help="Path to generator weights (.pth). Auto-resolves EMA weights if omitted.")
     parser.add_argument("--output", type=str, default="generated_skin.png", help="Path to save the output PNG file")
     parser.add_argument("--latent_dim", type=int, default=128, help="Size of noise vector z")
     args = parser.parse_args()
