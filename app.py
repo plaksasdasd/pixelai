@@ -12,6 +12,7 @@ import io
 from models.generator import Generator
 from models.text_encoder import TextEncoder
 from utils.visualization import tensor_to_pil, generate_3d_viewer_html, pil_to_base64
+from utils.samples import find_latest_sample_epoch
 from train import train
 from utils.data_prep import generate_test_dataset
 from data.dataset import MinecraftSkinDataset
@@ -447,11 +448,11 @@ with tabs[1]:
                 
             # Preview of current epoch samples
             if curr_epoch > 0:
-                preview_epoch = curr_epoch if (curr_epoch % 5 == 0 or curr_epoch == 1) else (curr_epoch - (curr_epoch % 5))
-                if preview_epoch < 1:
-                    preview_epoch = 1
-                
-                preview_files = [f for f in os.listdir(DEFAULT_SAMPLES_DIR) if f.startswith(f"epoch_{preview_epoch}_")]
+                preview_epoch = find_latest_sample_epoch(DEFAULT_SAMPLES_DIR, max_epoch=curr_epoch)
+
+                preview_files = []
+                if preview_epoch is not None:
+                    preview_files = [f for f in os.listdir(DEFAULT_SAMPLES_DIR) if f.startswith(f"epoch_{preview_epoch}_")]
                 if len(preview_files) > 0:
                     st.write(f"**Промежуточный результат генерации нейросети (эпоха {preview_epoch}):**")
                     cols = st.columns(min(len(preview_files), 4))
